@@ -1,0 +1,9 @@
+# One table per line. Blank lines and '#' comments are ignored.
+# Format: TABLE_NAME  or  OWNER.TABLE_NAME
+#
+# Unqualified names (no OWNER.) resolve using --db-a-schema/--db-b-schema
+# (or DB_A_SCHEMA/DB_B_SCHEMA) if set, otherwise each connection's own
+# default schema. An OWNER.TABLE entry here always overrides those defaults.
+EMPLOYEES
+DEPARTMENTS
+SALES.ORDERS

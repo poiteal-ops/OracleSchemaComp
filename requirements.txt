@@ -1,0 +1,4 @@
+oracledb>=2.0
+
+# dev/test only
+pytest>=7.0
