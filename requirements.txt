@@ -2,3 +2,6 @@ oracledb>=2.0
 
 # dev/test only
 pytest>=7.0
+
+# notebook only (notebooks/rowcount_compare.ipynb); bring your own Jupyter/JupyterLab
+pandas>=2.0
