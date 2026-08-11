@@ -4,6 +4,9 @@
 # Local handover/scratch notes
 handover.md
 
+# Issue tracking notes (local only)
+docs/issues/
+
 # Python
 .venv/
 .tmp/
