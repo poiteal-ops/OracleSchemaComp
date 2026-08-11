@@ -16,7 +16,7 @@ Assumptions:
     (letters, digits, ``_``/``$``/``#``, starting with a letter). Quoted,
     mixed-case identifiers are out of scope.
 
-Configuration (environment variables, see .env.example):
+Configuration (environment variables, see config/.env.example):
   DB_A_USERNAME, DB_A_PASSWORD, DB_A_DSN, DB_A_SCHEMA (optional)
   DB_B_USERNAME, DB_B_PASSWORD, DB_B_DSN, DB_B_SCHEMA (optional)
 
@@ -24,6 +24,7 @@ Usage:
   python rowcount_compare.py --tables-file tables.txt --output-dir reports
   python rowcount_compare.py --tables-file tables.txt --db-a-schema HR_PROD --db-b-schema HR_UAT
   python rowcount_compare.py --table HR.EMPLOYEES
+  python rowcount_compare.py --whole-schema --db-a-schema HR_PROD --db-b-schema HR_UAT
 """
 
 from __future__ import annotations
@@ -41,10 +42,13 @@ from pathlib import Path
 from typing import Optional
 
 import oracledb
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_$#]{0,127}$")
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_ENV_FILE = _PROJECT_ROOT / "config" / ".env"
 
 # ORA error codes that are transient (worth a bounded retry) when establishing
 # a connection. See references/python-analysis.md, "Connection pooling and retry".
@@ -199,6 +203,28 @@ def load_table_list(path: Path) -> list:
     return tables
 
 
+def merge_discovered_objects(names_a: list[str], names_b: list[str]) -> list[TableRef]:
+    """Merge discovered names, skipping identifiers this tool cannot address safely."""
+    seen = set()
+    tables = []
+    for name in [*names_a, *names_b]:
+        try:
+            if name != name.upper():
+                raise ValueError("quoted or mixed-case identifiers are unsupported")
+            table = parse_table_ref(name)
+        except ValueError as exc:
+            logger.warning("Discovered object skipped: %r (%s)", name, exc)
+            continue
+        key = table.raw.upper()
+        if key not in seen:
+            seen.add(key)
+            tables.append(table)
+
+    if not tables:
+        raise ValueError("No valid objects discovered across either schema")
+    return sorted(tables, key=lambda table: table.raw.upper())
+
+
 def is_transient_ora_error(error: "oracledb.Error") -> bool:
     args = error.args
     if not args:
@@ -236,6 +262,37 @@ def get_row_count(
         cursor.execute(f"SELECT COUNT(*) FROM {qualified_name}")  # noqa: S608 - identifier validated/quoted above
         row = cursor.fetchone()
     return int(row[0])
+
+
+def discover_schema_objects(
+    connection: "oracledb.Connection",
+    owner: str,
+) -> list[str]:
+    """Return accessible tables, views, and materialized views for an owner."""
+    sql = """
+        SELECT table_name AS object_name
+        FROM all_tables tables_found
+        WHERE owner = :owner
+          AND NOT EXISTS (
+              SELECT 1
+              FROM all_mviews mviews_for_tables
+              WHERE mviews_for_tables.owner = tables_found.owner
+                AND mviews_for_tables.container_name = tables_found.table_name
+          )
+        UNION
+        SELECT view_name AS object_name
+        FROM all_views
+        WHERE owner = :owner
+        UNION
+        SELECT mview_name AS object_name
+        FROM all_mviews
+        WHERE owner = :owner
+        ORDER BY object_name
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(sql, owner=owner)
+        rows = cursor.fetchall()
+    return [row[0] for row in rows]
 
 
 def compare_row_counts(
@@ -319,6 +376,11 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     table_source = parser.add_mutually_exclusive_group(required=True)
     table_source.add_argument("--tables-file", type=Path, help="File with one table name (or OWNER.TABLE) per line")
     table_source.add_argument("--table", help="Compare a single table (TABLE_NAME or OWNER.TABLE_NAME) instead of a whole file list")
+    table_source.add_argument(
+        "--whole-schema",
+        action="store_true",
+        help="Discover and compare all tables, views, and materialized views in both schemas",
+    )
     parser.add_argument("--output-dir", default=Path("reports"), type=Path, help="Directory to write report CSVs into")
     parser.add_argument("--db-a-prefix", default="DB_A", help="Env var prefix for database A (default: DB_A)")
     parser.add_argument("--db-b-prefix", default="DB_B", help="Env var prefix for database B (default: DB_B)")
@@ -339,6 +401,7 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
 
 
 def main(argv: Optional[list] = None) -> int:
+    load_dotenv(_ENV_FILE, override=False)
     args = parse_args(argv)
     logging.basicConfig(
         level=args.log_level,
@@ -351,24 +414,40 @@ def main(argv: Optional[list] = None) -> int:
     try:
         config_a = load_config(args.db_a_prefix, "A", args.db_a_schema)
         config_b = load_config(args.db_b_prefix, "B", args.db_b_schema)
-        tables = [parse_table_ref(args.table)] if args.table else load_table_list(args.tables_file)
+        if args.whole_schema:
+            if not config_a.default_schema or not config_b.default_schema:
+                raise RuntimeError(
+                    "--whole-schema requires an explicit schema for both database A and B"
+                )
+            tables = None
+        else:
+            tables = [parse_table_ref(args.table)] if args.table else load_table_list(args.tables_file)
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         logger.critical("Setup failed: %s", exc)
         return 2
 
     logger.info(
-        "run=%s tables=%d schema_a=%s schema_b=%s starting comparison",
-        run_id, len(tables), config_a.default_schema, config_b.default_schema,
+        "run=%s tables=%s schema_a=%s schema_b=%s starting comparison",
+        run_id, len(tables) if tables is not None else "pending discovery",
+        config_a.default_schema, config_b.default_schema,
     )
 
     try:
         with connect_with_retry(config_a) as connection_a, connect_with_retry(config_b) as connection_b:
+            if args.whole_schema:
+                try:
+                    names_a = discover_schema_objects(connection_a, config_a.default_schema)
+                    names_b = discover_schema_objects(connection_b, config_b.default_schema)
+                    tables = merge_discovered_objects(names_a, names_b)
+                except ValueError as exc:
+                    logger.critical("run=%s schema discovery failed: %s", run_id, exc)
+                    return 2
             results = compare_row_counts(
                 connection_a, connection_b, tables, run_id,
                 schema_a=config_a.default_schema, schema_b=config_b.default_schema,
             )
     except oracledb.Error as exc:
-        logger.critical("run=%s could not establish both connections: %s", run_id, exc)
+        logger.critical("run=%s connection or schema discovery failed: %s", run_id, exc)
         return 2
 
     full_report_path = args.output_dir / f"rowcount_report_{run_id}.csv"

@@ -1,7 +1,15 @@
 # Secrets
 .env
 
+# Local handover/scratch notes
+handover.md
+
+# Issue tracking notes (local only)
+docs/issues/
+
 # Python
+.venv/
+.tmp/
 __pycache__/
 *.pyc
 .pytest_cache/

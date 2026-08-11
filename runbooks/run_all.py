@@ -21,6 +21,7 @@ SCENARIO_MODULES = [
     "scenario_missing_table",
     "scenario_per_side_schema",
     "scenario_single_table",
+    "scenario_whole_schema",
 ]
 
 
