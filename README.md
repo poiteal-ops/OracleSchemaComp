@@ -14,9 +14,10 @@ src/rowcount_compare.py   Main program
 tests/                     Unit tests (pytest) for pure logic - no DB required
 runbooks/                  Executable integration scenarios against a fake
                            Oracle driver - no DB required
-tables.example.txt         Example table list
+notebooks/                 Runnable fake/live comparison walkthrough
+config/tables.example.txt  Example table list
 config/.env.example        Example environment configuration
-requirements.txt           Runtime dependencies + pytest (dev/test)
+requirements.txt           Runtime dependencies + test/notebook tooling
 ```
 
 ## Install
@@ -51,7 +52,7 @@ Never commit a filled-in `.env` file.
 
 Choose exactly one comparison mode:
 
-- `--tables-file tables.txt` - a file with one table per line (see below).
+- `--tables-file config/tables.txt` - a file with one table per line (see below).
 - `--table HR.EMPLOYEES` - compare just that one table, no file needed.
 - `--whole-schema` - discover and compare all accessible tables, views, and
   materialized views in both schemas. This mode requires an explicit schema
@@ -60,7 +61,7 @@ Choose exactly one comparison mode:
 ## Table list
 
 For `--tables-file`: one table per line in a text file (see
-`tables.example.txt`). Blank lines and `#` comments are ignored.
+`config/tables.example.txt`). Blank lines and `#` comments are ignored.
 
 ```
 EMPLOYEES
@@ -88,30 +89,54 @@ For `--whole-schema`, step 3 does not apply: both schemas must be supplied via
 
 ## Run
 
+### With `.venv` activated
+
+If your PowerShell prompt starts with `(.venv)`, the virtual environment is
+already active. Run a full-schema comparison with:
+
+```powershell
+python .\src\rowcount_compare.py --whole-schema
 ```
-python src/rowcount_compare.py --tables-file tables.example.txt --output-dir reports
+
+### Without activating `.venv`
+
+Call the virtual environment's Python executable directly:
+
+```powershell
+.\.venv\Scripts\python.exe .\src\rowcount_compare.py --whole-schema
+```
+
+Both forms automatically load connection settings from `config/.env`. Reports
+are written to `reports/` unless you provide `--output-dir`.
+
+### Other comparison modes
+
+Compare a table list:
+
+```powershell
+python .\src\rowcount_compare.py --tables-file config/tables.example.txt --output-dir reports
 ```
 
 A single table, without a table-list file:
 
-```
-python src/rowcount_compare.py --table HR.EMPLOYEES
+```powershell
+python .\src\rowcount_compare.py --table HR.EMPLOYEES
 ```
 
 With per-side default schemas, e.g. the same tables living under different
 schema names in each environment:
 
-```
-python src/rowcount_compare.py --tables-file tables.example.txt \
+```powershell
+python .\src\rowcount_compare.py --tables-file config/tables.example.txt `
     --db-a-schema HR_PROD --db-b-schema HR_UAT
 ```
 
-Full option list: `python src/rowcount_compare.py --help`.
+Full option list: `python .\src\rowcount_compare.py --help`.
 
 Discover and compare whole schemas with different owner names:
 
-```
-python src/rowcount_compare.py --whole-schema \
+```powershell
+python .\src\rowcount_compare.py --whole-schema `
     --db-a-schema HR_PROD --db-b-schema HR_UAT
 ```
 
@@ -167,6 +192,23 @@ Two independent layers, neither needs a live database:
   missing on one side (error path, and proves one failure doesn't abort the
   scan), per-side default schema resolution, and comparing a single table
   via `--table` instead of a table-list file, plus whole-schema discovery.
+
+## Notebook
+
+Open `notebooks/oracle_schema_comparison.ipynb` in VS Code or an existing
+Jupyter frontend and select the interpreter at `.venv\Scripts\python.exe`.
+If JupyterLab is already installed on your machine, you can launch it with:
+
+```powershell
+jupyter lab notebooks/oracle_schema_comparison.ipynb
+```
+
+The fake demonstration runs without Oracle access. The live execution cell is
+disabled by default; it reads credentials only from exported environment
+variables or the ignored `config/.env` file. Review the displayed argument list
+before setting `RUN_LIVE_COMPARISON = True`. Generated reports can expose schema
+object names and Oracle errors, so keep their output directory ignored or
+access-controlled.
 
 ## Examples
 
@@ -226,7 +268,7 @@ QA_DSN=qa-db.example.com:1521/HRQA
 ```
 
 ```
-python src/rowcount_compare.py --tables-file tables.example.txt \
+python src/rowcount_compare.py --tables-file config/tables.example.txt \
     --db-a-prefix DEV --db-b-prefix QA
 ```
 
@@ -235,13 +277,13 @@ python src/rowcount_compare.py --tables-file tables.example.txt \
 Compare a whole table list, writing reports to the default `reports/` directory:
 
 ```
-python src/rowcount_compare.py --tables-file tables.example.txt
+python src/rowcount_compare.py --tables-file config/tables.example.txt
 ```
 
 Compare a whole table list, writing reports to a custom directory:
 
 ```
-python src/rowcount_compare.py --tables-file tables.example.txt --output-dir out/2026-07-13
+python src/rowcount_compare.py --tables-file config/tables.example.txt --output-dir out/2026-07-13
 ```
 
 Compare just one table, no table-list file needed:
@@ -254,7 +296,7 @@ Same source/target tables, but they live under different schema names in
 each environment (e.g. `HR_PROD` vs `HR_UAT`):
 
 ```
-python src/rowcount_compare.py --tables-file tables.example.txt \
+python src/rowcount_compare.py --tables-file config/tables.example.txt \
     --db-a-schema HR_PROD --db-b-schema HR_UAT
 ```
 
@@ -276,7 +318,7 @@ above) already fails the step on any mismatch, error, or setup problem, so
 no extra `||` handling is needed:
 
 ```
-python src/rowcount_compare.py --tables-file tables.example.txt --output-dir reports
+python src/rowcount_compare.py --tables-file config/tables.example.txt --output-dir reports
 ```
 
 Full option list:

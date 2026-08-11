@@ -21,8 +21,8 @@ Configuration (environment variables, see config/.env.example):
   DB_B_USERNAME, DB_B_PASSWORD, DB_B_DSN, DB_B_SCHEMA (optional)
 
 Usage:
-  python rowcount_compare.py --tables-file tables.txt --output-dir reports
-  python rowcount_compare.py --tables-file tables.txt --db-a-schema HR_PROD --db-b-schema HR_UAT
+  python rowcount_compare.py --tables-file config/tables.txt --output-dir reports
+  python rowcount_compare.py --tables-file config/tables.txt --db-a-schema HR_PROD --db-b-schema HR_UAT
   python rowcount_compare.py --table HR.EMPLOYEES
   python rowcount_compare.py --whole-schema --db-a-schema HR_PROD --db-b-schema HR_UAT
 """
