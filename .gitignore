@@ -1,7 +1,12 @@
 # Secrets
 .env
 
+# Local handover/scratch notes
+handover.md
+
 # Python
+.venv/
+.tmp/
 __pycache__/
 *.pyc
 .pytest_cache/

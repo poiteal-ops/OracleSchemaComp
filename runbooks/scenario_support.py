@@ -20,6 +20,7 @@ from fake_oracle import fake_oracle  # noqa: E402
 
 DSN_A = "fake-dsn-a"
 DSN_B = "fake-dsn-b"
+TEMP_ROOT = Path(__file__).resolve().parent.parent / ".tmp"
 
 
 @dataclass
@@ -51,29 +52,44 @@ def run_compare(
     table: Optional[str] = None,
     schema_a: Optional[str] = None,
     schema_b: Optional[str] = None,
+    whole_schema: bool = False,
+    objects_a: Optional[List[str]] = None,
+    objects_b: Optional[List[str]] = None,
+    views_a: Optional[List[str]] = None,
+    views_b: Optional[List[str]] = None,
+    mviews_a: Optional[Dict[str, str]] = None,
+    mviews_b: Optional[Dict[str, str]] = None,
 ) -> RunbookOutcome:
     """Run rowcount_compare.main() end-to-end against fake table-count data.
 
-    Pass exactly one of table_lines (a whole table-list file) or table (a
-    single table name), mirroring the CLI's --tables-file/--table split.
+    Pass exactly one of table_lines, table, or whole_schema, mirroring the
+    CLI's mutually exclusive comparison modes.
     """
-    if (table_lines is None) == (table is None):
-        raise ValueError("run_compare requires exactly one of table_lines or table")
+    source_count = sum((table_lines is not None, table is not None, whole_schema))
+    if source_count != 1:
+        raise ValueError(
+            "run_compare requires exactly one of table_lines, table, or whole_schema"
+        )
 
     env = {
         "DB_A_USERNAME": "fake_user_a",
         "DB_A_PASSWORD": "fake_password_a",
         "DB_A_DSN": DSN_A,
+        "DB_A_SCHEMA": schema_a or "",
         "DB_B_USERNAME": "fake_user_b",
         "DB_B_PASSWORD": "fake_password_b",
         "DB_B_DSN": DSN_B,
+        "DB_B_SCHEMA": schema_b or "",
     }
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    TEMP_ROOT.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as tmp_dir:
         tmp_path = Path(tmp_dir)
         output_dir = tmp_path / "reports"
 
-        if table is not None:
+        if whole_schema:
+            argv = ["--whole-schema", "--output-dir", str(output_dir)]
+        elif table is not None:
             argv = ["--table", table, "--output-dir", str(output_dir)]
         else:
             tables_file = tmp_path / "tables.txt"
@@ -86,7 +102,25 @@ def run_compare(
             argv += ["--db-b-schema", schema_b]
 
         buffer = io.StringIO()
-        with _temp_env(env), fake_oracle({DSN_A: counts_a, DSN_B: counts_b}), redirect_stdout(buffer):
+        schema_objects = {
+            DSN_A: {
+                schema_a: {
+                    "tables": objects_a or [],
+                    "views": views_a or [],
+                    "mviews": mviews_a or {},
+                }
+            } if schema_a else {},
+            DSN_B: {
+                schema_b: {
+                    "tables": objects_b or [],
+                    "views": views_b or [],
+                    "mviews": mviews_b or {},
+                }
+            } if schema_b else {},
+        }
+        with _temp_env(env), fake_oracle(
+            {DSN_A: counts_a, DSN_B: counts_b}, schema_objects
+        ), redirect_stdout(buffer):
             exit_code = rowcount_compare.main(argv)
 
         full_report = _read_latest(output_dir, "rowcount_report_*.csv")

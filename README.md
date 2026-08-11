@@ -5,7 +5,7 @@ Compares row counts for a given list of tables between two Oracle databases
 error out on one side) are additionally written to a separate differences
 report.
 
-Requires Python 3.9+.
+Requires Python 3.12+.
 
 ## Project structure
 
@@ -15,20 +15,23 @@ tests/                     Unit tests (pytest) for pure logic - no DB required
 runbooks/                  Executable integration scenarios against a fake
                            Oracle driver - no DB required
 tables.example.txt         Example table list
-.env.example               Example environment configuration
-requirements.txt           oracledb (runtime) + pytest (dev/test)
+config/.env.example        Example environment configuration
+requirements.txt           Runtime dependencies + pytest (dev/test)
 ```
 
 ## Install
 
-```
-pip install -r requirements.txt
+```powershell
+python3.14 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
 
 ## Configure
 
-Copy `.env.example` to `.env` and fill in real values (or export the same
-variables in your shell/CI):
+Copy `config/.env.example` to `config/.env` and fill in real values. The
+program loads this file automatically; variables already exported by your
+shell or CI take precedence.
 
 ```
 DB_A_USERNAME=...
@@ -46,11 +49,13 @@ Never commit a filled-in `.env` file.
 
 ## Table selection
 
-Give either a whole list of tables or a single table - they're mutually
-exclusive:
+Choose exactly one comparison mode:
 
 - `--tables-file tables.txt` - a file with one table per line (see below).
 - `--table HR.EMPLOYEES` - compare just that one table, no file needed.
+- `--whole-schema` - discover and compare all accessible tables, views, and
+  materialized views in both schemas. This mode requires an explicit schema
+  for each side.
 
 ## Table list
 
@@ -78,6 +83,9 @@ Per table entry, in priority order:
 3. Otherwise, the table name is unqualified and resolves against each
    connection's own default schema.
 
+For `--whole-schema`, step 3 does not apply: both schemas must be supplied via
+`--db-a-schema`/`--db-b-schema` or `DB_A_SCHEMA`/`DB_B_SCHEMA`.
+
 ## Run
 
 ```
@@ -99,6 +107,13 @@ python src/rowcount_compare.py --tables-file tables.example.txt \
 ```
 
 Full option list: `python src/rowcount_compare.py --help`.
+
+Discover and compare whole schemas with different owner names:
+
+```
+python src/rowcount_compare.py --whole-schema \
+    --db-a-schema HR_PROD --db-b-schema HR_UAT
+```
 
 ## Output
 
@@ -123,7 +138,7 @@ A console summary is also printed.
 |---|---|
 | 0 | Every table matched |
 | 1 | At least one mismatch or error |
-| 2 | Setup failure - missing config, bad table list, or couldn't connect |
+| 2 | Setup failure - missing config/schema, bad table list, connection failure, or schema discovery failure |
 
 ## Testing
 
@@ -151,16 +166,16 @@ Two independent layers, neither needs a live database:
   Scenarios covered: all tables match, a table mismatches, a table is
   missing on one side (error path, and proves one failure doesn't abort the
   scan), per-side default schema resolution, and comparing a single table
-  via `--table` instead of a table-list file.
+  via `--table` instead of a table-list file, plus whole-schema discovery.
 
 ## Examples
 
 ### Connection setup
 
-Copy `.env.example` to `.env`:
+Copy `config/.env.example` to `config/.env`:
 
 ```
-cp .env.example .env
+Copy-Item config/.env.example config/.env
 ```
 
 Fill it in for two named environments, e.g. comparing production to UAT:
@@ -177,16 +192,17 @@ DB_B_DSN=uat-db.example.com:1521/HRUAT
 DB_B_SCHEMA=HR_UAT
 ```
 
-Load it into your shell before running the script (bash/zsh):
+Local runs load `config/.env` automatically. If you prefer to export variables
+explicitly (for example in CI), bash/zsh can load the same file with:
 
 ```
-set -a; source .env; set +a
+set -a; source config/.env; set +a
 ```
 
 PowerShell:
 
 ```
-Get-Content .env | ForEach-Object {
+Get-Content config/.env | ForEach-Object {
     if ($_ -match '^\s*([^#=]+)=(.*)$') {
         [System.Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim())
     }
@@ -196,7 +212,7 @@ Get-Content .env | ForEach-Object {
 Or export the same variables directly in CI (e.g. GitHub Actions `env:` /
 `secrets:`) instead of using a `.env` file at all.
 
-You can compare more than one pair of environments without editing `.env` by
+You can compare more than one pair of environments without editing the file by
 using alternate prefixes and `--db-a-prefix`/`--db-b-prefix`:
 
 ```
@@ -248,6 +264,13 @@ Increase log verbosity for troubleshooting a connection or a specific table:
 python src/rowcount_compare.py --table HR.EMPLOYEES --log-level DEBUG
 ```
 
+Discover all supported objects in two explicitly named schemas:
+
+```
+python src/rowcount_compare.py --whole-schema \
+    --db-a-schema HR_PROD --db-b-schema HR_UAT
+```
+
 Use in a CI pipeline - the script's own exit code (0/1/2, see "Exit codes"
 above) already fails the step on any mismatch, error, or setup problem, so
 no extra `||` handling is needed:
@@ -285,6 +308,7 @@ Available scenarios:
 | `scenario_missing_table.py` | A table is missing on one side (ORA-00942-style error); reported as `status=error` without aborting the rest of the scan |
 | `scenario_per_side_schema.py` | `--db-a-schema`/`--db-b-schema` resolve an unqualified table name differently per side, while an explicit `OWNER.TABLE` entry ignores the defaults |
 | `scenario_single_table.py` | `--table` compares one table without a `--tables-file` |
+| `scenario_whole_schema.py` | Discovers tables, views, and materialized views from both schemas; unions names and reports an object missing on one side as an error |
 
 Each scenario is self-contained (sets up fake env vars and a fake Oracle
 driver, runs `rowcount_compare.main()` end-to-end, asserts on the exit code
@@ -295,13 +319,21 @@ worked example of a specific behavior.
 
 - **Setup failure (exit 2), "Missing environment variables"** - the
   `DB_A_*`/`DB_B_*` env vars (or the `--db-a-prefix`/`--db-b-prefix` you
-  passed) aren't set. Check `.env` is loaded into the shell running the
-  script.
+  passed) aren't set. Check `config/.env` exists and contains the expected
+  names, or check the environment exported by the calling shell/CI process.
+- **Setup failure (exit 2), "--whole-schema requires an explicit schema"** -
+  set both `DB_A_SCHEMA` and `DB_B_SCHEMA`, or pass both schema flags.
+- **Schema discovery found no valid objects** - verify the owner names and the
+  connecting users' visibility in `ALL_TABLES`, `ALL_VIEWS`, and `ALL_MVIEWS`.
+  Prefer direct least-privilege grants for the objects being compared; do not
+  grant broad catalog access solely to make this tool work without a security
+  review.
 - **A table shows `status=error`** - see `error_a`/`error_b` in the CSV for
   the underlying ORA error. Common cause: the table doesn't exist under the
   schema being used on that side - check the "Schema resolution" section
   above.
 - **Setup failure, "Invalid table identifier"** - the table list contains
-  something other than a plain `TABLE` or `OWNER.TABLE` entry (e.g. a
-  quoted or mixed-case identifier); the error names the file and line
-  number.
+  something other than a plain `TABLE` or `OWNER.TABLE` entry (for example,
+  a quoted identifier or one containing spaces); the error names the file
+  and line number. Input case is normalized for ordinary unquoted names,
+  but case-sensitive quoted Oracle identifiers are unsupported.
