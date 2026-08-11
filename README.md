@@ -14,10 +14,12 @@ src/rowcount_compare.py   Main program
 tests/                     Unit tests (pytest) for pure logic - no DB required
 runbooks/                  Executable integration scenarios against a fake
                            Oracle driver - no DB required
-notebooks/                 Runnable fake/live comparison walkthrough
-config/tables.example.txt  Example table list
-config/.env.example        Example environment configuration
-requirements.txt           Runtime dependencies + test/notebook tooling
+notebooks/                 Jupyter notebook + helper for interactive use -
+                           requires a live DB, see "Notebook" below
+tables.example.txt         Example table list
+.env.example               Example environment configuration
+requirements.txt           oracledb (runtime) + pytest (dev/test) + pandas
+                           (notebook)
 ```
 
 ## Install
@@ -27,6 +29,9 @@ python3.14 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 ```
+
+`pandas` is only needed for `notebooks/`; Jupyter/JupyterLab itself isn't
+pinned here - install whichever you already use.
 
 ## Configure
 
@@ -165,6 +170,19 @@ A console summary is also printed.
 | 1 | At least one mismatch or error |
 | 2 | Setup failure - missing config/schema, bad table list, connection failure, or schema discovery failure |
 
+## Notebook
+
+For interactive use, `notebooks/rowcount_compare.ipynb` runs the same CLI as a
+subprocess and loads its CSV reports into pandas DataFrames. `notebooks/helper.py`
+is the module behind it (`load_env_file`, `run_comparison`, `load_latest_reports`) -
+no DB logic is duplicated, it just drives `src/rowcount_compare.py` and reads its
+output. Requires `pandas` (see Install above) and, like the CLI, a live Oracle
+connection - unlike `tests/`/`runbooks/`, it is not covered by the fake driver.
+
+```
+jupyter lab notebooks/rowcount_compare.ipynb
+```
+
 ## Testing
 
 Two independent layers, neither needs a live database:
@@ -299,6 +317,52 @@ each environment (e.g. `HR_PROD` vs `HR_UAT`):
 python src/rowcount_compare.py --tables-file config/tables.example.txt \
     --db-a-schema HR_PROD --db-b-schema HR_UAT
 ```
+
+The connecting user is rarely the schema owner - e.g. a read-only account
+`hr_reader` querying tables it doesn't own. `--db-a-schema`/`--db-b-schema`
+qualify every unqualified table name with that owner, so `hr_reader` only
+needs `SELECT` granted on the target tables, nothing more:
+
+```
+python src/rowcount_compare.py --tables-file tables.example.txt \
+    --db-a-schema HR_PROD --db-b-schema HR_PROD
+```
+
+Same idea via env vars instead of flags (handy when the schema doesn't
+change run to run, e.g. in `.env` or CI `env:`) - `--db-a-schema` still wins
+if both are set:
+
+```
+DB_A_SCHEMA=HR_PROD
+DB_B_SCHEMA=HR_PROD
+```
+
+```
+python src/rowcount_compare.py --tables-file tables.example.txt
+```
+
+Mixing a default schema with a one-off exception: everything in the file
+resolves against `--db-a-schema`/`--db-b-schema` *except* rows already
+qualified as `OWNER.TABLE`, which always win regardless of the flags. Given a
+`tables.txt` of:
+
+```
+EMPLOYEES
+DEPARTMENTS
+FINANCE.INVOICES
+```
+
+```
+python src/rowcount_compare.py --tables-file tables.txt \
+    --db-a-schema HR_PROD --db-b-schema HR_UAT
+```
+
+`EMPLOYEES`/`DEPARTMENTS` resolve to `HR_PROD.*`/`HR_UAT.*`; `FINANCE.INVOICES`
+resolves to `FINANCE.INVOICES` unchanged on both sides.
+
+Comparing more than one schema pair from the same table list isn't supported
+in a single run - `--db-a-schema`/`--db-b-schema` apply to the whole list, so
+split into separate table-list files (or runs) per schema pair instead.
 
 Increase log verbosity for troubleshooting a connection or a specific table:
 
