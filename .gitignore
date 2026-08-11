@@ -7,6 +7,9 @@ handover.md
 # Issue tracking notes (local only)
 docs/issues/
 
+# Session planning/spec notes (local only)
+docs/superpowers/
+
 # Python
 .venv/
 .tmp/
